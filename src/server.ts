@@ -103,9 +103,7 @@ app.get('/f/:prefix/:handle', (req, res, next) => {
   const posts = postsInWindow(source.id, windowStartDay(config.activityWindowDays))
   const average = averagePerDay(posts, source.first_success_at, config.activityWindowDays)
   res.set('cache-control', 'public, max-age=3600')
-  res
-    .type('html')
-    .send(renderLanding(source, listItemsForFeed(source.id, 15), average, countItems(source.id)))
+  res.type('html').send(renderLanding(source, average, countItems(source.id)))
 })
 
 /**

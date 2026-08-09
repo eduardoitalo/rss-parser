@@ -6,8 +6,9 @@ import type { JobResult } from './scheduler.js'
 const BYTES_PER_GB = 1024 ** 3
 
 /**
- * Scheduled poll of the proxy provider's remaining traffic (see
- * lib/proxyTraffic). Skipped silently when no API key is configured; a failed
+ * Poll of the proxy provider's remaining traffic (see lib/proxyTraffic), run on
+ * deploy and once a day after the refresh cycle — the only two things that
+ * spend the allowance. Skipped silently when no API key is configured; a failed
  * poll is reported as a job error but leaves the last good figure cached.
  */
 export async function checkProxyTraffic(): Promise<JobResult> {

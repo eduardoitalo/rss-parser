@@ -9,8 +9,9 @@
  * credentials in OUTBOUND_PROXY_URL — so the feature is opt-in and stays silent
  * when the key is unset, the same way the proxy itself is optional.
  *
- * The figure is polled on a schedule (see jobs/checkProxyTraffic) and cached
- * here; the footer renders whatever the last poll left. Deliberately not routed
+ * The figure is polled on deploy and once a day (see jobs/checkProxyTraffic)
+ * and cached here; the footer renders whatever the last poll left, which is the
+ * figure as of the end of the last refresh cycle. Deliberately not routed
  * through lib/proxy's outboundFetch: this is the app's own request to a billing
  * dashboard, not adapter traffic, and must not consume metered proxy bandwidth.
  */

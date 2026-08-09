@@ -82,21 +82,18 @@ const STYLES = `
     flex: none; width: 5rem; color: var(--muted); font-size: 0.6875rem;
     letter-spacing: .08em; text-transform: uppercase;
   }
-  .stat-val { font-size: 0.8125rem; }
-  .stat-val.ok { color: var(--accent); }
-  .stat-val.bad { color: var(--bad); }
-  .stat-val.wait { color: var(--muted); }
+  .stat-val, .status { font-size: 0.8125rem; }
+  /* Health colours, shared by the status-box cell and the index's per-feed
+     indicator so one feed reads the same on both pages. */
+  .ok { color: var(--accent); }
+  .bad { color: var(--bad); }
+  .wait { color: var(--muted); }
   .more { margin-left: auto; font-size: 0.8125rem; white-space: nowrap; }
   .meta { color: var(--muted); font-size: 0.8125rem; }
   .post { display: flex; align-items: baseline; gap: .55rem; }
   .post .meta { flex: none; }
-  /* Decoration lives on .txt, not the flex anchor, so the underline covers the
-     title text but not the trailing external-link arrow (the ::after sibling). */
-  .post .title { display: flex; align-items: baseline; min-width: 0; text-decoration: none; }
-  .post .title .txt {
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    text-decoration: underline;
-  }
+  /* Titles are plain text, not links out to the post — see renderLanding. */
+  .post .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .err { color: var(--bad); font-size: 0.8125rem; word-break: break-word; }
   footer { margin-top: 3.5rem; color: var(--muted); font-size: 0.8125rem; }
   .empty { padding: 1.5rem 0; }
@@ -207,11 +204,16 @@ export function renderIndex(
         ? `<img class="avatar" src="${escapeHtml(source.profile_image_url)}" alt="" />`
         : '<span class="avatar"></span>'
 
+      // The health word rather than the last-fetch time: whether a feed is
+      // working is what this list is for, and "updated 3h ago" says nothing
+      // about that. The exact timestamp is a click away on the landing page.
+      const status = statusLabel(source)
+
       return `  <li>
     <div class="row">
       ${avatar}
       <span class="handle">@${escapeHtml(source.handle)}</span>
-      <span class="meta">updated ${escapeHtml(ago(source.last_fetched_at))}</span>
+      <span class="status ${status.cls}">${status.text}</span>
       <a class="more" href="${escapeHtml(landingUrl(source))}">more</a>
     </div>
   </li>`
@@ -267,10 +269,13 @@ export function renderLanding(
     `<link rel="apple-touch-icon" sizes="180x180" href="${escapeHtml(icon)}" />\n` +
     `<link rel="alternate" type="application/rss+xml" title="${escapeHtml(source.name)}" href="${escapeHtml(feedUrlFor(source))}" />\n`
 
+  // Dates and titles only. This page is a signpost to the feed, not a reader:
+  // the post URLs belong in the RSS, and linking them here only invited the
+  // page to be used as a browsable index of the account.
   const recent = items
     .map(
       (item) =>
-        `  <li class="post"><span class="meta mono">${new Date(item.published_at).toISOString().slice(0, 10)}</span> <a class="title ext" href="${escapeHtml(item.url)}" title="${escapeHtml(item.title)}"><span class="txt">${escapeHtml(item.title)}</span></a></li>`,
+        `  <li class="post"><span class="meta mono">${new Date(item.published_at).toISOString().slice(0, 10)}</span> <span class="title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</span></li>`,
     )
     .join('\n')
 

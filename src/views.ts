@@ -6,6 +6,7 @@ import type { AssetUsage } from './lib/assets.js'
 import { escapeHtml } from './lib/html.js'
 import type { ProxyTraffic } from './lib/proxyTraffic.js'
 import { feedUrlFor, landingUrl, sourceLink } from './lib/rss.js'
+import { nextDailyRun } from './lib/schedule.js'
 
 /**
  * The two HTML pages, as template strings. No template engine and no client-side
@@ -147,6 +148,9 @@ function until(ms: number): string {
   return `in ${Math.round(minutes / 60)}h`
 }
 
+/** An hour of the day as a wall clock reads it: 0 → "00:00". */
+const clockHour = (hour: number): string => `${String(hour).padStart(2, '0')}:00`
+
 /** One labelled cell in the status box: an uppercase key over its value. */
 function stat(key: string, value: string, valueClass = '', title = ''): string {
   const cls = valueClass ? ` ${valueClass}` : ''
@@ -216,7 +220,7 @@ export function renderIndex(
     `<h1>Feeds</h1>
 <p class="sub">${sources.length} Instagram account${sources.length === 1 ? '' : 's'} published as RSS. The list comes from <a class="ext" href="https://github.com/numbersoffice/rss-parser/blob/main/accounts.txt"><code>accounts.txt</code></a>. Open a PR there to request a new feed.</p>
 ${body}
-<footer>Refreshed every ${config.refreshIntervalMinutes} minutes, keeping the newest ${config.maxItemsPerFeed} posts per feed.<br />
+<footer>Refreshed once a day at ${clockHour(config.refreshHour)} and on every deploy, keeping the newest ${config.maxItemsPerFeed} posts per feed.<br />
 Mirrored images: <strong>${formatBytes(usage.bytes)}</strong> across ${usage.files} file${usage.files === 1 ? '' : 's'}.${
       traffic
         ? `<br />\nProxy traffic remaining: <strong>${formatBytes(traffic.remainingBytes)}</strong> of ${formatBytes(traffic.limitBytes)}.`
@@ -277,7 +281,7 @@ ${stat('status', status.text, status.cls)}
 ${rateStat(average)}
 ${stat('posts', String(count))}
 ${stat('updated', escapeHtml(ago(source.last_fetched_at)))}
-${stat('next', escapeHtml(until(source.next_fetch_at)))}
+${stat('next', escapeHtml(until(nextDailyRun(config.refreshHour))), '', `next refresh at ${clockHour(config.refreshHour)}`)}
 </div>
 ${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}
 ${items.length ? `<ul style="margin-top:1.5rem">\n${recent}\n</ul>` : '<p class="meta" style="margin-top:1.5rem">No posts cached yet.</p>'}`,

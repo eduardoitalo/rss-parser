@@ -31,8 +31,6 @@ export interface SourceRow {
   profile_image_url: string | null
   /** Filename under data/assets. Non-null is the "already mirrored" test. */
   profile_asset: string | null
-  /** When this account is next due a fetch. The scheduling column. */
-  next_fetch_at: number
   last_fetched_at: number | null
   last_success_at: number | null
   /**
@@ -110,7 +108,6 @@ CREATE TABLE IF NOT EXISTS sources (
   description TEXT,
   profile_image_url TEXT,
   profile_asset TEXT,
-  next_fetch_at INTEGER NOT NULL,
   last_fetched_at INTEGER,
   last_success_at INTEGER,
   first_success_at INTEGER,
@@ -126,8 +123,6 @@ CREATE TABLE IF NOT EXISTS sources (
   created_at INTEGER NOT NULL,
   UNIQUE (type, handle)
 );
-
-CREATE INDEX IF NOT EXISTS sources_next_fetch ON sources (next_fetch_at);
 
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY,
@@ -212,6 +207,7 @@ export function initDb(): Database.Database {
 
   database = db
   addMissingColumns()
+  dropRetiredColumns()
   rewriteBaseUrlIfChanged()
   return db
 }
@@ -238,6 +234,33 @@ function addMissingColumns(): void {
     if (existing.includes(column)) continue
     database!.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`)
     log.info('added missing column', { table, column })
+  }
+}
+
+/**
+ * The other half of the same bargain: a column dropped from SCHEMA lingers on a
+ * live database, and a `NOT NULL` one with no default would then break every
+ * insert that no longer supplies it. SQLite can drop a column in place (3.35+,
+ * well below what better-sqlite3 bundles); any index over it has to go first.
+ *
+ * Data loss is the point here, so a column only belongs on this list once the
+ * app has genuinely stopped reading it.
+ */
+function dropRetiredColumns(): void {
+  const retired: [table: string, column: string, indexes: string[]][] = [
+    // Per-account fetch scheduling. Refreshes are a single daily job over every
+    // account now, so there is nothing left to schedule per row.
+    ['sources', 'next_fetch_at', ['sources_next_fetch']],
+  ]
+  for (const [table, column, indexes] of retired) {
+    const present = database!
+      .prepare<[], { name: string }>(`PRAGMA table_info(${table})`)
+      .all()
+      .some((row) => row.name === column)
+    if (!present) continue
+    for (const index of indexes) database!.exec(`DROP INDEX IF EXISTS ${index}`)
+    database!.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`)
+    log.info('dropped retired column', { table, column })
   }
 }
 
@@ -342,15 +365,19 @@ export function getSource(id: number): SourceRow | undefined {
   return db().prepare<[number], SourceRow>('SELECT * FROM sources WHERE id = ?').get(id)
 }
 
-/** A brand-new account is due immediately — it has no items to serve yet. */
+/**
+ * A brand-new account. It serves an empty feed until the next refresh cycle
+ * fills it — which, because accounts.txt is only reconciled at boot, is the
+ * startup run of refresh-feeds a moment later.
+ */
 export function insertSource(type: string, handle: string): SourceRow {
   const now = Date.now()
   const info = db()
     .prepare(
-      `INSERT INTO sources (type, handle, name, next_fetch_at, updated_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO sources (type, handle, name, updated_at, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
     )
-    .run(type, handle, `@${handle}`, now, now, now)
+    .run(type, handle, `@${handle}`, now, now)
   return getSource(Number(info.lastInsertRowid))!
 }
 
@@ -433,7 +460,6 @@ export interface SourceOutcome {
   error: string | null
   httpStatus: number | null
   durationMs: number | null
-  nextFetchAt: number
   consecutiveFailures: number
   permanentError: string | null
   permanentErrorKind: string | null
@@ -497,7 +523,6 @@ export function commitRefresh(
        last_fetch_error = @error,
        last_fetch_http_status = @httpStatus,
        last_fetch_duration_ms = @durationMs,
-       next_fetch_at = @nextFetchAt,
        consecutive_failures = @consecutiveFailures,
        permanent_error = @permanentError,
        permanent_error_kind = @permanentErrorKind,
@@ -527,7 +552,6 @@ export function commitRefresh(
       error: outcome.error,
       httpStatus: outcome.httpStatus,
       durationMs: outcome.durationMs,
-      nextFetchAt: outcome.nextFetchAt,
       consecutiveFailures: outcome.consecutiveFailures,
       permanentError: outcome.permanentError,
       permanentErrorKind: outcome.permanentErrorKind,

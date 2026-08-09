@@ -65,12 +65,13 @@ export const config = {
   maxFetchAttempts: 3,
 
   /**
-   * Minimum interval between on-demand refreshes of one account. Refreshes are
-   * triggered by feed polls, not a timer (see lib/refreshQueue.ts); this is the
-   * cap that a poll respects — it drives `next_fetch_at`, so a feed polled every
-   * minute still refetches Instagram at most once an hour.
+   * The hour of the local-time day the feed refresh runs, 0 being midnight —
+   * the only schedule there is. Every account is refreshed then, and again on
+   * the way up after a deploy; nothing a reader does triggers a fetch. Local
+   * time means the container's, so set `TZ` if UTC isn't the midnight you mean
+   * (see lib/schedule.ts).
    */
-  refreshIntervalMinutes: 60,
+  refreshHour: 0,
 
   /**
    * How often to poll the proxy provider (Decodo) for the residential plan's
@@ -115,26 +116,12 @@ export const config = {
   tickIntervalMs: 60_000,
 
   /**
-   * Pause the background refresh coordinator leaves between successive fetches
-   * when several are queued at once (e.g. a reader polls every feed together, or
-   * the boot seed). Keeps to never-more-than-one-request-in-flight and doesn't
-   * hammer the proxy pool back to back. See lib/refreshQueue.ts.
+   * Pause the refresh job leaves between successive accounts. The refresh runs
+   * one account at a time (see jobs/refreshFeeds.ts); this keeps a 50-account
+   * run from hammering the proxy pool back to back. There is a whole day of
+   * headroom, so it can afford to be generous.
    */
   refreshStaggerMs: 5_000,
-
-  /**
-   * Backoff after a failed fetch, doubling per consecutive failure and capped at
-   * the normal TTL: 10m, 20m, 40m, then 60m. A burned proxy exit IP recovers in
-   * minutes instead of waiting out the full hour.
-   */
-  retryBackoffMs: 10 * 60_000,
-
-  /**
-   * Backoff for an account that can't work at all (gone, private, bad handle).
-   * Not permanent: accounts come back from private and renames, and Meta
-   * occasionally 404s a live profile. Once a day is free and self-healing.
-   */
-  permanentErrorBackoffMs: 24 * 60 * 60_000,
 
   /** How long per-attempt fetch records are kept for diagnosing proxy trouble. */
   fetchLogRetentionDays: 7,

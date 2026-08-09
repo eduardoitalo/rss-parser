@@ -61,9 +61,9 @@ export interface RefreshResult {
  * asset sweep reclaims) rather than a row pointing at a missing image.
  */
 export async function refreshSource(sourceId: number): Promise<RefreshResult> {
-  // Read the row here rather than trusting a caller's copy: `profile_asset` and
-  // `consecutive_failures` drive mirror-once and backoff decisions, and acting on
-  // a stale snapshot would silently re-download the avatar on every refresh.
+  // Read the row here rather than trusting a caller's copy: `profile_asset`
+  // decides mirror-once and `consecutive_failures` is counted up from it, and
+  // acting on a stale snapshot would silently re-download the avatar every time.
   const source = getSource(sourceId)
   if (!source) {
     return {
@@ -102,7 +102,7 @@ export async function refreshSource(sourceId: number): Promise<RefreshResult> {
     // Most refreshes re-fetch the same posts unchanged. Skipping the identical
     // rows keeps the write phase empty, and — because `updated_at` only moves
     // when something really changed — leaves every reader's cached ETag valid,
-    // so an hourly refresh of a quiet account costs no reader any bandwidth.
+    // so a daily refresh of a quiet account costs no reader any bandwidth.
     if (!isUnchanged(row, data)) updates.push({ id: row.id, data })
   }
   const creates: ItemData[] = []
@@ -141,7 +141,6 @@ export async function refreshSource(sourceId: number): Promise<RefreshResult> {
     httpStatus,
     durationMs,
     newPosts,
-    nextFetchAt: Date.now() + config.refreshIntervalMinutes * 60_000,
     consecutiveFailures: 0,
     permanentError: null,
     permanentErrorKind: null,
@@ -180,10 +179,12 @@ export async function refreshSource(sourceId: number): Promise<RefreshResult> {
 
 /**
  * Record a failed fetch. Nothing about the cached items changes — only the
- * source's status and when to try again. A transient failure (a burned proxy
- * exit IP) backs off in minutes; an account that can't work at all backs off to
- * once a day, but never stops being retried, because private/renamed accounts
- * come back and Instagram occasionally 404s a live profile.
+ * source's status, so the page and the logs can show what went wrong.
+ *
+ * There is no backoff to compute: the next attempt is simply the next daily
+ * cycle. Nothing is ever given up on, not even a `PermanentFetchError` — the
+ * kind is recorded to explain the feed's state, but private and renamed
+ * accounts come back, and Instagram occasionally 404s a live profile.
  */
 function recordFailure(
   source: SourceRow,
@@ -197,13 +198,6 @@ function recordFailure(
   const httpStatus = typeof debug.httpStatus === 'number' ? debug.httpStatus : null
   const durationMs = typeof debug.durationMs === 'number' ? debug.durationMs : null
 
-  const backoff = permanent
-    ? config.permanentErrorBackoffMs
-    : Math.min(
-        config.refreshIntervalMinutes * 60_000,
-        config.retryBackoffMs * 2 ** Math.min(failures - 1, 8),
-      )
-
   commitRefresh(
     source.id,
     { updates: [], deletes: [], creates: [] },
@@ -212,7 +206,6 @@ function recordFailure(
       error,
       httpStatus,
       durationMs,
-      nextFetchAt: Date.now() + backoff,
       consecutiveFailures: failures,
       permanentError: permanent ? error : null,
       permanentErrorKind: permanent ? (err as PermanentFetchError).kind : null,
@@ -405,7 +398,12 @@ async function resolveImage(
     }
     try {
       const stored = await storeImage(url, base)
-      gallery.push({ asset: stored.filename, bytes: stored.bytes, mime: stored.mime, imageUrl: url })
+      gallery.push({
+        asset: stored.filename,
+        bytes: stored.bytes,
+        mime: stored.mime,
+        imageUrl: url,
+      })
       replacements.push([url, stored.url])
       mirroredNow = true
     } catch (err) {

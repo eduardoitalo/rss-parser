@@ -20,6 +20,8 @@ services:
       # Optional Decodo dashboard API key for the proxy-traffic footer line.
       DECODO_API_TOKEN: ${DECODO_API_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Which midnight the daily refresh runs at. Unset, the container is UTC.
+      TZ: ${TZ:-UTC}
     volumes:
       # SQLite database + mirrored images.
       - ./data:/app/data

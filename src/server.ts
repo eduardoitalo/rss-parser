@@ -177,8 +177,13 @@ const scheduler = new Scheduler([
     run: retryFailedFeeds,
   },
   {
+    // Same shape as the refresh above, and deliberately listed after it: a tick
+    // runs its jobs one at a time and waits for each, so both at boot and at
+    // midnight this poll happens once the cycle that spent the traffic is done,
+    // and the footer shows what the run actually left.
     name: 'check-proxy-traffic',
-    schedule: every(config.proxyTrafficIntervalMinutes * 60_000),
+    schedule: dailyAt(config.proxyTrafficHour),
+    runAtStartup: true,
     run: checkProxyTraffic,
   },
   { name: 'prune-history', schedule: every(DAY_MS), run: pruneHistory },

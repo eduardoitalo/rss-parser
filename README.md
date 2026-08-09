@@ -88,7 +88,7 @@ and a job still running from a previous tick is skipped rather than overlapped.
 | --------------------- | ------------------ | ----------------------------------------------------- |
 | `refresh-feeds`       | 00:00, and at boot | Refreshes every account, one at a time                |
 | `retry-feeds`         | 1 min              | Re-fetches accounts whose last attempt failed         |
-| `check-proxy-traffic` | 1 h                | Reads the proxy plan's remaining traffic (if enabled) |
+| `check-proxy-traffic` | 00:00, and at boot | Reads the proxy plan's remaining traffic (if enabled) |
 | `prune-history`       | 24 h               | Drops fetch records and day counts past their window  |
 | `sweep-assets`        | 24 h               | Deletes image files no post references                |
 
@@ -234,7 +234,7 @@ Only deployment values and secrets come from the environment:
 | `ACCOUNTS_FILE`      | `./accounts.txt`        | Path to the feed list                                                                                                                                                                 |
 | `DATA_DIR`           | `./data`                | SQLite file and mirrored images                                                                                                                                                       |
 | `LOG_LEVEL`          | `info`                  | `debug` \| `info` \| `warn` \| `error`                                                                                                                                                |
-| `TZ`                 | `UTC`                   | Which midnight the daily refresh runs at                                                                                                                                              |
+| `TZ`                 | `UTC`                   | Which midnight the daily jobs run at                                                                                                                                                  |
 
 ## Operations
 

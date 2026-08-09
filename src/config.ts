@@ -74,12 +74,17 @@ export const config = {
   refreshHour: 0,
 
   /**
-   * How often to poll the proxy provider (Decodo) for the residential plan's
-   * remaining traffic, shown in the status footer. Only runs when
-   * DECODO_API_TOKEN is set; the persisted job schedule caps it at this rate
-   * even across restarts, so a flapping container can't hammer the billing API.
+   * The hour of the local-time day the proxy provider (Decodo) is polled for
+   * the residential plan's remaining traffic, shown in the status footer. Only
+   * runs when DECODO_API_TOKEN is set.
+   *
+   * The same hour as `refreshHour` on purpose: the refresh is what spends the
+   * traffic, so the figure is only stale between a refresh and the poll that
+   * follows it. Polling on the same schedule — plus once on the way up after a
+   * deploy — means the footer is re-read right after every cycle that could
+   * have changed it, and never at some unrelated hour in between.
    */
-  proxyTrafficIntervalMinutes: 60,
+  proxyTrafficHour: 0,
 
   /**
    * Download each post image once and serve it from our own /assets, instead

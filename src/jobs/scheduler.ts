@@ -2,6 +2,7 @@ import { config } from '../config.js'
 import { lastJobRun, recordJobRun } from '../db.js'
 import { formatDuration, log } from '../log.js'
 import { describeError } from '../lib/errors.js'
+import { previousDailyRun } from '../lib/schedule.js'
 
 /**
  * The cron replacement: one timer, a static list of jobs, no dependency and no
@@ -22,15 +23,47 @@ export interface JobResult {
   fields?: Record<string, unknown>
 }
 
+/**
+ * Either "this often" or "once a day at this hour". Housekeeping jobs only care
+ * about the rate; the feed refresh has to land at a particular time of day, and
+ * an `everyMs: DAY_MS` job drifts later by however long the previous run took
+ * plus a tick, which after a few restarts is any hour at all.
+ */
+export type JobSchedule =
+  | { kind: 'every'; ms: number }
+  /** Local time — see lib/schedule.ts on what that means in a container. */
+  | { kind: 'dailyAt'; hour: number }
+
+export const every = (ms: number): JobSchedule => ({ kind: 'every', ms })
+export const dailyAt = (hour: number): JobSchedule => ({ kind: 'dailyAt', hour })
+/** Considered on every tick. For a job that is its own due-check and usually
+ * finds nothing to do — see jobs/refreshFeeds.retryFailedFeeds. */
+export const everyTick = (): JobSchedule => every(0)
+
+/** Whether a job last run at `lastRunAt` (0 = never) is due at `now`. */
+export function isDue(schedule: JobSchedule, lastRunAt: number, now: number): boolean {
+  return schedule.kind === 'every'
+    ? now - lastRunAt >= schedule.ms
+    : lastRunAt < previousDailyRun(schedule.hour, now)
+}
+
 export interface Job {
   name: string
-  everyMs: number
+  schedule: JobSchedule
+  /**
+   * Run once shortly after boot as well, whatever the schedule says. For the
+   * feed refresh this is what makes a deploy a refresh: the persisted run time
+   * would otherwise say today's run already happened.
+   */
+  runAtStartup?: boolean
   run(): Promise<JobResult>
 }
 
 interface JobState {
   job: Job
   running: boolean
+  /** A pending `runAtStartup`, cleared by the run it triggers. */
+  startupDue: boolean
 }
 
 export class Scheduler {
@@ -39,7 +72,11 @@ export class Scheduler {
   private lastTickAt = 0
 
   constructor(jobs: Job[]) {
-    this.states = jobs.map((job) => ({ job, running: false }))
+    this.states = jobs.map((job) => ({
+      job,
+      running: false,
+      startupDue: job.runAtStartup ?? false,
+    }))
   }
 
   start(): void {
@@ -69,7 +106,8 @@ export class Scheduler {
         continue
       }
       const last = lastJobRun(state.job.name) ?? 0
-      if (Date.now() - last < state.job.everyMs) continue
+      if (!state.startupDue && !isDue(state.job.schedule, last, Date.now())) continue
+      state.startupDue = false
 
       state.running = true
       const startedAt = Date.now()

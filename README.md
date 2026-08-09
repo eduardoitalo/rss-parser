@@ -20,9 +20,9 @@ pnpm build
 pnpm start                  # http://localhost:3000
 ```
 
-Open `http://localhost:3000` for the list of published feeds. The first refresh
-of each account happens within a minute or two — refreshes are staggered on
-purpose (see [Refreshing](#refreshing)).
+Open `http://localhost:3000` for the list of published feeds. Startup kicks off a
+refresh of every account, one at a time with a gap between them, so a longer list
+takes a few minutes to fill in (see [Refreshing](#refreshing)).
 
 With Docker:
 
@@ -43,12 +43,12 @@ natgeo
 @euronews          # the @ is optional
 ```
 
-- **Add a line** → the feed appears, and its first fetch happens on the next tick.
+- **Add a line** → the feed appears, and the startup refresh fills it in.
 - **Remove a line** → the feed, its cached posts and every image it mirrored are
   deleted.
 
-Changes are picked up within a minute without a restart. `docker kill -s HUP
-<container>` forces an immediate re-read.
+The file is read once at startup, so an edit applies on the next deploy or
+`docker compose restart`.
 
 If the file is missing, unreadable, or contains no usable usernames, **nothing is
 deleted** — the app logs an error and leaves every feed alone. A failed bind
@@ -75,30 +75,50 @@ serves the account's own avatar as its icon.
 
 ### Refreshing
 
-A single 60-second tick runs four jobs. Each logs one line per run, and a job
-still running from a previous tick is skipped rather than overlapped.
+Feeds are refreshed **once a day at midnight, and on every deploy** — plus a
+retry for anything that failed, described below. Nothing a reader does fetches
+anything: polling a feed serves what is already stored, so outbound traffic
+depends on how many accounts are published, not on how many readers are
+subscribed or how often they poll.
 
-| Job             | Every | What it does                                         |
-| --------------- | ----- | ---------------------------------------------------- |
-| `sync-accounts` | 1 min | Diffs `accounts.txt` against the database            |
-| `refresh-feeds` | 1 min | Refreshes up to 3 due accounts, one at a time        |
-| `prune-history` | 24 h  | Drops fetch records and day counts past their window |
-| `sweep-assets`  | 24 h  | Deletes image files no post references               |
+A single 60-second tick decides which jobs are due. Each logs one line per run,
+and a job still running from a previous tick is skipped rather than overlapped.
+
+| Job                   | When               | What it does                                          |
+| --------------------- | ------------------ | ----------------------------------------------------- |
+| `refresh-feeds`       | 00:00, and at boot | Refreshes every account, one at a time                |
+| `retry-feeds`         | 1 min              | Re-fetches accounts whose last attempt failed         |
+| `check-proxy-traffic` | 1 h                | Reads the proxy plan's remaining traffic (if enabled) |
+| `prune-history`       | 24 h               | Drops fetch records and day counts past their window  |
+| `sweep-assets`        | 24 h               | Deletes image files no post references                |
+
+`accounts.txt` is reconciled once at startup rather than by a job — the file is
+committed, so editing it means a redeploy anyway, and the refresh that follows
+boot fills in whatever was added.
 
 Refreshes are **sequential with a 5-second gap**, never parallel. That's the
 whole throttling strategy: it keeps at most one Instagram request in flight,
 which is what a metered residential proxy wants and what Instagram's per-IP rate
-limiting punishes you for ignoring. Three per minute is 180 accounts/hour of
-capacity against a 60-minute refresh interval, so a 50-account list has ample
-headroom — and adding 50 accounts at once spreads their first fetch over about 17
-minutes instead of firing 50 requests simultaneously.
+limiting punishes you for ignoring. A 50-account list takes a few minutes of
+wall clock against a whole day of headroom. The retry pass shares that same
+one-at-a-time guarantee — a retry that comes due mid-cycle is dropped, since the
+cycle is about to refresh that account anyway.
 
-A failed fetch backs off and retries: 10 → 20 → 40 → 60 minutes for transient
-failures, once a day for an account that can't work at all (deleted, renamed,
-gone private). Nothing is ever given up on permanently, because private accounts
-come back and Instagram occasionally 404s a live profile. A feed that has been
-broken for over a day gets a `[SYSTEM]` entry explaining why it stopped, so you
-find out in your reader rather than by checking the status page.
+Midnight is the container's local time, so set `TZ` if UTC isn't the midnight
+you mean. The hour itself is `refreshHour` in `src/config.ts`.
+
+**A failed fetch is retried on a doubling backoff** — 10 → 20 → 40 → 80 minutes,
+then every 4 hours until it works. The usual failure is a burned proxy exit IP or
+a rate-limit blip, over in minutes, and a feed shouldn't sit a day stale waiting
+for the next cycle. A failed fetch downloads no images, so a retry costs one
+profile request and nothing else. An account that is _permanently_ broken
+(deleted, renamed, gone private) gets no retry of its own — no backoff makes a
+deleted account exist — and simply comes round again on the next daily cycle.
+
+Nothing is ever given up on either way, because private accounts come back and
+Instagram occasionally 404s a live profile. A feed that has been broken for over
+a day gets a `[SYSTEM]` entry explaining why it stopped, so you find out in your
+reader rather than by checking the status page.
 
 Cached posts are never dropped because a fetch failed — the previous items keep
 serving.
@@ -113,6 +133,16 @@ origin-restricted, so many readers can't load them at all. So each post's image 
 downloaded once into `data/assets/` and the feed serves that stable URL instead.
 If a download fails the post still appears, pointing at Instagram's URL, and the
 next refresh retries the mirror.
+
+**Once is once.** A stored post is never re-downloaded — its `asset` column says
+the image is already mirrored — and even when the rows and the directory disagree
+(a refresh that stored images and then failed before committing, a database
+restored without its assets volume, a post pruned and re-fetched), the file
+already sitting under the post's name is adopted instead of fetched again. Asset
+names are content-stable, `{source}-{post}[-{index}]`, which is the same property
+that lets `/assets` be served immutable. The `images=` count in a refresh's log
+line therefore counts real downloads: a daily cycle over feeds that haven't posted
+shows no image traffic at all.
 
 Images are ~95% of the bytes this app pulls, so by default they're fetched
 **directly** and only retried through the proxy if that fails — the CDN serves
@@ -190,8 +220,9 @@ line. When unset, fetches go out directly.
 ## Configuration
 
 Tunable knobs live in [`src/config.ts`](src/config.ts) and are committed, so
-changing one is a commit like any other: refresh interval, posts kept per feed,
-fetch attempts, refreshes per tick, stagger, retention, backoff.
+changing one is a commit like any other: the refresh hour, posts kept per feed,
+fetch attempts, the gap between accounts, retry backoff, image mirroring,
+retention.
 
 Only deployment values and secrets come from the environment:
 
@@ -203,6 +234,7 @@ Only deployment values and secrets come from the environment:
 | `ACCOUNTS_FILE`      | `./accounts.txt`        | Path to the feed list                                                                                                                                                                 |
 | `DATA_DIR`           | `./data`                | SQLite file and mirrored images                                                                                                                                                       |
 | `LOG_LEVEL`          | `info`                  | `debug` \| `info` \| `warn` \| `error`                                                                                                                                                |
+| `TZ`                 | `UTC`                   | Which midnight the daily refresh runs at                                                                                                                                              |
 
 ## Operations
 
@@ -212,7 +244,7 @@ Everything worth watching goes to stdout as one line per event:
 INFO  rss-parser listening port=3000 url=https://rss.example.com feeds=12 proxy=gate.decodo.com:7000 …
 INFO  job job=sync-accounts added=1 handles=+@newaccount feeds=13 took=3ms
 INFO  refreshed handle=@nasa http=200 ms=812 items=12 new=2 pruned=2 images=2
-WARN  refresh failed handle=@gone http=404 attempt=1 error="Instagram profile @gone not found"
+WARN  refresh failed handle=@gone http=404 error="Instagram profile @gone not found"
 INFO  job job=refresh-feeds ok=2 failed=1 new=2 pruned=2 images=2 took=16.0s
 ```
 
@@ -222,7 +254,7 @@ INFO  job job=refresh-feeds ok=2 failed=1 new=2 pruned=2 images=2 took=16.0s
   thing to back up. Keep it on a normal filesystem; SQLite's WAL locking is
   unreliable on NFS/SMB.
 - Deleting `data/` is recoverable: the feeds rebuild themselves from
-  `accounts.txt` on the next few ticks.
+  `accounts.txt` on the next start.
 
 ## Architecture
 
@@ -245,6 +277,7 @@ src/
     assets.ts         local image store
     rss.ts            RSS 2.0 rendering
     accounts.ts       accounts.txt parsing
+    schedule.ts       when the daily refresh is due (pure, unit-tested)
     proxy.ts          optional HTTP proxy with sticky sessions
     errors.ts         flattens error causes into one readable message
   jobs/
@@ -274,7 +307,7 @@ Everything platform-specific is in one adapter file.
 2. Register it in `src/adapters/registry.ts` and give it a URL prefix in
    `FEED_PREFIXES`.
 
-Refreshing, caching, image mirroring, pruning, error backoff and RSS rendering
+Refreshing, caching, image mirroring, pruning, error reporting and RSS rendering
 all pick it up. The account list would need a way to say which platform a handle
 belongs to — today every line in `accounts.txt` is an Instagram username.
 

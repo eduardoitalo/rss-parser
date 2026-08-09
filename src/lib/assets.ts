@@ -23,6 +23,13 @@ export interface StoredAsset {
   url: string
   bytes: number
   mime: string
+  /**
+   * False when the file was already on disk and was adopted rather than
+   * fetched. Only the log's image counter cares — but it is the number that
+   * says how much outbound traffic a refresh actually cost, so it should not
+   * count files we didn't download.
+   */
+  downloaded: boolean
 }
 
 /**
@@ -84,6 +91,19 @@ const EXTENSIONS: Record<string, string> = {
 
 const extensionFor = (mime: string): string => EXTENSIONS[mime] ?? '.jpg'
 
+/**
+ * The reverse map, for adopting a file that is already on disk. Every extension
+ * we write maps back to exactly one type; `.jpg` wins for `image/jpg` because
+ * that spelling is not a real media type and never worth serving back.
+ */
+const MIMES: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.avif': 'image/avif',
+}
+
 /** Reject anything that could escape the assets directory or a URL path. */
 const SAFE_SEGMENT = /^[A-Za-z0-9._-]{1,80}$/
 
@@ -94,14 +114,29 @@ export function isSafeAssetName(name: string): boolean {
 export const assetPath = (filename: string): string => path.join(assetsDir, filename)
 
 /**
- * Download an image and store it under data/assets, returning the stable public
- * URL. Throws on failure so callers can decide how to degrade — every caller
- * degrades to the raw CDN URL and retries on a later refresh.
+ * Ensure an image is stored under data/assets, returning the stable public URL.
+ * Throws on failure so callers can decide how to degrade — every caller degrades
+ * to the raw CDN URL and retries on a later refresh.
+ *
+ * A file already sitting under `baseName` is adopted as-is and nothing is
+ * downloaded. Names are content-stable — `{source}-{post}[-{index}]`, and a
+ * post's images never change under it, which is why /assets can be served
+ * immutable — so an existing file is by definition the right bytes. The
+ * database's own mirror-once check (a non-null `asset`) covers the ordinary
+ * case; this covers the ones where the rows and the directory have drifted
+ * apart: a refresh that stored images and then failed before committing, a
+ * database restored without its assets volume, an item pruned and re-fetched.
  *
  * Writes to a temp file and renames into place, so a crashed or truncated
  * download is never visible under /assets.
  */
 export async function storeImage(url: string, baseName: string): Promise<StoredAsset> {
+  const adopted = await existingAsset(baseName)
+  if (adopted) {
+    log.debug('image already stored, not downloading', { asset: adopted.filename })
+    return adopted
+  }
+
   const res = await fetchImage(url)
   if (!res.ok) {
     throw new Error(`image request returned ${res.status}`)
@@ -143,7 +178,24 @@ export async function storeImage(url: string, baseName: string): Promise<StoredA
     usage.bytes += bytes.byteLength - replaced
   }
 
-  return { filename, url: assetUrl(filename), bytes: bytes.byteLength, mime }
+  return { filename, url: assetUrl(filename), bytes: bytes.byteLength, mime, downloaded: true }
+}
+
+/**
+ * A stored file for `baseName`, whatever extension it was saved with, or
+ * undefined if there isn't one. An empty file is ignored rather than adopted:
+ * downloads are written to a temp file and renamed, so a zero-byte asset can
+ * only be damage, and re-fetching it is the repair.
+ */
+export async function existingAsset(baseName: string): Promise<StoredAsset | undefined> {
+  for (const [extension, mime] of Object.entries(MIMES)) {
+    const filename = `${baseName}${extension}`
+    if (!isSafeAssetName(filename)) continue
+    const bytes = await fileSize(assetPath(filename))
+    if (bytes === null || bytes === 0) continue
+    return { filename, url: assetUrl(filename), bytes, mime, downloaded: false }
+  }
+  return undefined
 }
 
 /** Size of a file, or null if it isn't there. */

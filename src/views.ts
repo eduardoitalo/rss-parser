@@ -6,6 +6,7 @@ import type { AssetUsage } from './lib/assets.js'
 import { escapeHtml } from './lib/html.js'
 import type { ProxyTraffic } from './lib/proxyTraffic.js'
 import { feedUrlFor, landingUrl, sourceLink } from './lib/rss.js'
+import { nextDailyRun } from './lib/schedule.js'
 
 /**
  * The two HTML pages, as template strings. No template engine and no client-side
@@ -147,11 +148,30 @@ function until(ms: number): string {
   return `in ${Math.round(minutes / 60)}h`
 }
 
+/** An hour of the day as a wall clock reads it: 0 → "00:00". */
+const clockHour = (hour: number): string => `${String(hour).padStart(2, '0')}:00`
+
 /** One labelled cell in the status box: an uppercase key over its value. */
 function stat(key: string, value: string, valueClass = '', title = ''): string {
   const cls = valueClass ? ` ${valueClass}` : ''
   const attr = title ? ` title="${escapeHtml(title)}"` : ''
   return `  <div class="stat"><span class="stat-key">${escapeHtml(key)}</span><span class="stat-val${cls}"${attr}>${value}</span></div>`
+}
+
+/**
+ * When this feed is next fetched. Normally the daily cycle, but a feed whose
+ * last fetch failed has a retry pending sooner than that, and saying "in 9h"
+ * while it is about to be retried in ten minutes would just be wrong.
+ */
+function nextStat(source: SourceRow): string {
+  const daily = nextDailyRun(config.refreshHour)
+  const retry = source.retry_at
+  const soonest = retry !== null && retry < daily ? retry : daily
+  const title =
+    soonest === daily
+      ? `daily refresh at ${clockHour(config.refreshHour)}`
+      : 'retrying after a failed fetch'
+  return stat('next', escapeHtml(until(soonest)), '', title)
 }
 
 /** The health word for a feed, plus the colour class it should carry. */
@@ -216,7 +236,7 @@ export function renderIndex(
     `<h1>Feeds</h1>
 <p class="sub">${sources.length} Instagram account${sources.length === 1 ? '' : 's'} published as RSS. The list comes from <a class="ext" href="https://github.com/numbersoffice/rss-parser/blob/main/accounts.txt"><code>accounts.txt</code></a>. Open a PR there to request a new feed.</p>
 ${body}
-<footer>Refreshed every ${config.refreshIntervalMinutes} minutes, keeping the newest ${config.maxItemsPerFeed} posts per feed.<br />
+<footer>Refreshed once a day at ${clockHour(config.refreshHour)} and on every deploy, keeping the newest ${config.maxItemsPerFeed} posts per feed.<br />
 Mirrored images: <strong>${formatBytes(usage.bytes)}</strong> across ${usage.files} file${usage.files === 1 ? '' : 's'}.${
       traffic
         ? `<br />\nProxy traffic remaining: <strong>${formatBytes(traffic.remainingBytes)}</strong> of ${formatBytes(traffic.limitBytes)}.`
@@ -277,7 +297,7 @@ ${stat('status', status.text, status.cls)}
 ${rateStat(average)}
 ${stat('posts', String(count))}
 ${stat('updated', escapeHtml(ago(source.last_fetched_at)))}
-${stat('next', escapeHtml(until(source.next_fetch_at)))}
+${nextStat(source)}
 </div>
 ${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}
 ${items.length ? `<ul style="margin-top:1.5rem">\n${recent}\n</ul>` : '<p class="meta" style="margin-top:1.5rem">No posts cached yet.</p>'}`,

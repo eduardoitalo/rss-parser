@@ -27,6 +27,7 @@ import {
 import { describeError } from './errors.js'
 import { escapeHtml } from './html.js'
 import { planReconcile } from './plan.js'
+import { retryBackoff } from './schedule.js'
 
 /** What one refresh did, for the caller's log line. */
 export interface RefreshResult {
@@ -61,9 +62,9 @@ export interface RefreshResult {
  * asset sweep reclaims) rather than a row pointing at a missing image.
  */
 export async function refreshSource(sourceId: number): Promise<RefreshResult> {
-  // Read the row here rather than trusting a caller's copy: `profile_asset` and
-  // `consecutive_failures` drive mirror-once and backoff decisions, and acting on
-  // a stale snapshot would silently re-download the avatar on every refresh.
+  // Read the row here rather than trusting a caller's copy: `profile_asset`
+  // decides mirror-once and `consecutive_failures` is counted up from it, and
+  // acting on a stale snapshot would silently re-download the avatar every time.
   const source = getSource(sourceId)
   if (!source) {
     return {
@@ -102,7 +103,7 @@ export async function refreshSource(sourceId: number): Promise<RefreshResult> {
     // Most refreshes re-fetch the same posts unchanged. Skipping the identical
     // rows keeps the write phase empty, and — because `updated_at` only moves
     // when something really changed — leaves every reader's cached ETag valid,
-    // so an hourly refresh of a quiet account costs no reader any bandwidth.
+    // so a daily refresh of a quiet account costs no reader any bandwidth.
     if (!isUnchanged(row, data)) updates.push({ id: row.id, data })
   }
   const creates: ItemData[] = []
@@ -141,7 +142,8 @@ export async function refreshSource(sourceId: number): Promise<RefreshResult> {
     httpStatus,
     durationMs,
     newPosts,
-    nextFetchAt: Date.now() + config.refreshIntervalMinutes * 60_000,
+    // Whatever was wrong is over; the daily cycle takes it from here.
+    retryAt: null,
     consecutiveFailures: 0,
     permanentError: null,
     permanentErrorKind: null,
@@ -180,10 +182,15 @@ export async function refreshSource(sourceId: number): Promise<RefreshResult> {
 
 /**
  * Record a failed fetch. Nothing about the cached items changes — only the
- * source's status and when to try again. A transient failure (a burned proxy
- * exit IP) backs off in minutes; an account that can't work at all backs off to
- * once a day, but never stops being retried, because private/renamed accounts
- * come back and Instagram occasionally 404s a live profile.
+ * source's status and when to try again.
+ *
+ * A transient failure (a burned proxy exit IP, a rate-limit blip) is retried on
+ * a doubling backoff, because that class of failure is usually over in minutes
+ * and a feed shouldn't sit a day stale waiting for the next cycle. An account
+ * that can't work at all gets no retry of its own — no backoff makes a deleted
+ * account exist — and simply comes round again on the next daily cycle. Nothing
+ * is ever given up on permanently either way: private and renamed accounts come
+ * back, and Instagram occasionally 404s a live profile.
  */
 function recordFailure(
   source: SourceRow,
@@ -197,13 +204,6 @@ function recordFailure(
   const httpStatus = typeof debug.httpStatus === 'number' ? debug.httpStatus : null
   const durationMs = typeof debug.durationMs === 'number' ? debug.durationMs : null
 
-  const backoff = permanent
-    ? config.permanentErrorBackoffMs
-    : Math.min(
-        config.refreshIntervalMinutes * 60_000,
-        config.retryBackoffMs * 2 ** Math.min(failures - 1, 8),
-      )
-
   commitRefresh(
     source.id,
     { updates: [], deletes: [], creates: [] },
@@ -212,7 +212,9 @@ function recordFailure(
       error,
       httpStatus,
       durationMs,
-      nextFetchAt: Date.now() + backoff,
+      retryAt: permanent
+        ? null
+        : Date.now() + retryBackoff(failures, config.retryBackoffMs, config.maxRetryBackoffMs),
       consecutiveFailures: failures,
       permanentError: permanent ? error : null,
       permanentErrorKind: permanent ? (err as PermanentFetchError).kind : null,
@@ -285,6 +287,8 @@ interface ResolvedImage {
   /** Extra gallery images (second onward); empty for a single-image post. */
   gallery: GalleryAsset[]
   content: string
+  /** Whether this item cost a download — adopting a file already on disk
+   * doesn't, so it doesn't show up in the refresh's image count. */
   mirroredNow: boolean
 }
 
@@ -381,7 +385,7 @@ async function resolveImage(
       coverBytes = stored.bytes
       coverMime = stored.mime
       replacements.push([coverUrl, stored.url])
-      mirroredNow = true
+      if (stored.downloaded) mirroredNow = true
     } catch (err) {
       warn(err) // leave the CDN URL in place; asset stays null so we retry
     }
@@ -405,9 +409,14 @@ async function resolveImage(
     }
     try {
       const stored = await storeImage(url, base)
-      gallery.push({ asset: stored.filename, bytes: stored.bytes, mime: stored.mime, imageUrl: url })
+      gallery.push({
+        asset: stored.filename,
+        bytes: stored.bytes,
+        mime: stored.mime,
+        imageUrl: url,
+      })
       replacements.push([url, stored.url])
-      mirroredNow = true
+      if (stored.downloaded) mirroredNow = true
     } catch (err) {
       warn(err) // leave this child's CDN URL; no record, so it retries next time
     }

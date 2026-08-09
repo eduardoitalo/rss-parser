@@ -1,6 +1,6 @@
 import { prefixForType } from './adapters/registry.js'
 import { config } from './config.js'
-import type { ItemRow, SourceRow } from './db.js'
+import type { SourceRow } from './db.js'
 import { type Average, formatPerDay } from './lib/activity.js'
 import type { AssetUsage } from './lib/assets.js'
 import { escapeHtml } from './lib/html.js'
@@ -89,11 +89,6 @@ const STYLES = `
   .bad { color: var(--bad); }
   .wait { color: var(--muted); }
   .more { margin-left: auto; font-size: 0.8125rem; white-space: nowrap; }
-  .meta { color: var(--muted); font-size: 0.8125rem; }
-  .post { display: flex; align-items: baseline; gap: .55rem; }
-  .post .meta { flex: none; }
-  /* Titles are plain text, not links out to the post — see renderLanding. */
-  .post .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .err { color: var(--bad); font-size: 0.8125rem; word-break: break-word; }
   footer { margin-top: 3.5rem; color: var(--muted); font-size: 0.8125rem; }
   .empty { padding: 1.5rem 0; }
@@ -257,27 +252,12 @@ Mirrored images: <strong>${formatBytes(usage.bytes)}</strong> across ${usage.fil
  * Unlike the Next.js version, the icon <link> tags have to be written out
  * explicitly — there is no file-convention magic injecting them.
  */
-export function renderLanding(
-  source: SourceRow,
-  items: ItemRow[],
-  average: Average | null,
-  count: number,
-): string {
+export function renderLanding(source: SourceRow, average: Average | null, count: number): string {
   const icon = `${config.publicBaseUrl}/f/${prefixForType(source.type)}/${encodeURIComponent(source.handle)}/icon`
   const head =
     `<link rel="icon" href="${escapeHtml(icon)}" sizes="any" />\n` +
     `<link rel="apple-touch-icon" sizes="180x180" href="${escapeHtml(icon)}" />\n` +
     `<link rel="alternate" type="application/rss+xml" title="${escapeHtml(source.name)}" href="${escapeHtml(feedUrlFor(source))}" />\n`
-
-  // Dates and titles only. This page is a signpost to the feed, not a reader:
-  // the post URLs belong in the RSS, and linking them here only invited the
-  // page to be used as a browsable index of the account.
-  const recent = items
-    .map(
-      (item) =>
-        `  <li class="post"><span class="meta mono">${new Date(item.published_at).toISOString().slice(0, 10)}</span> <span class="title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</span></li>`,
-    )
-    .join('\n')
 
   // source.name is "Full Name (@handle)"; the sub line below already shows the
   // handle, so drop that suffix from the heading to avoid repeating it.
@@ -304,7 +284,6 @@ ${stat('posts', String(count))}
 ${stat('updated', escapeHtml(ago(source.last_fetched_at)))}
 ${nextStat(source)}
 </div>
-${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}
-${items.length ? `<ul style="margin-top:1.5rem">\n${recent}\n</ul>` : '<p class="meta" style="margin-top:1.5rem">No posts cached yet.</p>'}`,
+${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}`,
   )
 }

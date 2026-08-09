@@ -75,10 +75,11 @@ serves the account's own avatar as its icon.
 
 ### Refreshing
 
-Feeds are refreshed **once a day at midnight, and on every deploy**. Nothing
-else fetches Instagram — polling a feed serves what is already stored and never
-triggers a fetch, so outbound traffic depends on how many accounts are published,
-not on how many readers are subscribed or how often they poll.
+Feeds are refreshed **once a day at midnight, and on every deploy** — plus a
+retry for anything that failed, described below. Nothing a reader does fetches
+anything: polling a feed serves what is already stored, so outbound traffic
+depends on how many accounts are published, not on how many readers are
+subscribed or how often they poll.
 
 A single 60-second tick decides which jobs are due. Each logs one line per run,
 and a job still running from a previous tick is skipped rather than overlapped.
@@ -86,6 +87,7 @@ and a job still running from a previous tick is skipped rather than overlapped.
 | Job                   | When               | What it does                                          |
 | --------------------- | ------------------ | ----------------------------------------------------- |
 | `refresh-feeds`       | 00:00, and at boot | Refreshes every account, one at a time                |
+| `retry-feeds`         | 1 min              | Re-fetches accounts whose last attempt failed         |
 | `check-proxy-traffic` | 1 h                | Reads the proxy plan's remaining traffic (if enabled) |
 | `prune-history`       | 24 h               | Drops fetch records and day counts past their window  |
 | `sweep-assets`        | 24 h               | Deletes image files no post references                |
@@ -98,18 +100,25 @@ Refreshes are **sequential with a 5-second gap**, never parallel. That's the
 whole throttling strategy: it keeps at most one Instagram request in flight,
 which is what a metered residential proxy wants and what Instagram's per-IP rate
 limiting punishes you for ignoring. A 50-account list takes a few minutes of
-wall clock against a whole day of headroom.
+wall clock against a whole day of headroom. The retry pass shares that same
+one-at-a-time guarantee — a retry that comes due mid-cycle is dropped, since the
+cycle is about to refresh that account anyway.
 
 Midnight is the container's local time, so set `TZ` if UTC isn't the midnight
 you mean. The hour itself is `refreshHour` in `src/config.ts`.
 
-A failed fetch is simply retried on the next cycle — there is no per-account
-backoff, since the next attempt is a day away regardless. Nothing is ever given
-up on, not even an account that looks permanently gone (deleted, renamed, gone
-private), because private accounts come back and Instagram occasionally 404s a
-live profile. A feed that has been broken for over a day gets a `[SYSTEM]` entry
-explaining why it stopped, so you find out in your reader rather than by checking
-the status page.
+**A failed fetch is retried on a doubling backoff** — 10 → 20 → 40 → 80 minutes,
+then every 4 hours until it works. The usual failure is a burned proxy exit IP or
+a rate-limit blip, over in minutes, and a feed shouldn't sit a day stale waiting
+for the next cycle. A failed fetch downloads no images, so a retry costs one
+profile request and nothing else. An account that is _permanently_ broken
+(deleted, renamed, gone private) gets no retry of its own — no backoff makes a
+deleted account exist — and simply comes round again on the next daily cycle.
+
+Nothing is ever given up on either way, because private accounts come back and
+Instagram occasionally 404s a live profile. A feed that has been broken for over
+a day gets a `[SYSTEM]` entry explaining why it stopped, so you find out in your
+reader rather than by checking the status page.
 
 Cached posts are never dropped because a fetch failed — the previous items keep
 serving.
@@ -124,6 +133,16 @@ origin-restricted, so many readers can't load them at all. So each post's image 
 downloaded once into `data/assets/` and the feed serves that stable URL instead.
 If a download fails the post still appears, pointing at Instagram's URL, and the
 next refresh retries the mirror.
+
+**Once is once.** A stored post is never re-downloaded — its `asset` column says
+the image is already mirrored — and even when the rows and the directory disagree
+(a refresh that stored images and then failed before committing, a database
+restored without its assets volume, a post pruned and re-fetched), the file
+already sitting under the post's name is adopted instead of fetched again. Asset
+names are content-stable, `{source}-{post}[-{index}]`, which is the same property
+that lets `/assets` be served immutable. The `images=` count in a refresh's log
+line therefore counts real downloads: a daily cycle over feeds that haven't posted
+shows no image traffic at all.
 
 Images are ~95% of the bytes this app pulls, so by default they're fetched
 **directly** and only retried through the proxy if that fails — the CDN serves
@@ -202,7 +221,8 @@ line. When unset, fetches go out directly.
 
 Tunable knobs live in [`src/config.ts`](src/config.ts) and are committed, so
 changing one is a commit like any other: the refresh hour, posts kept per feed,
-fetch attempts, the gap between accounts, image mirroring, retention.
+fetch attempts, the gap between accounts, retry backoff, image mirroring,
+retention.
 
 Only deployment values and secrets come from the environment:
 

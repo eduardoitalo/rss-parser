@@ -158,6 +158,22 @@ function stat(key: string, value: string, valueClass = '', title = ''): string {
   return `  <div class="stat"><span class="stat-key">${escapeHtml(key)}</span><span class="stat-val${cls}"${attr}>${value}</span></div>`
 }
 
+/**
+ * When this feed is next fetched. Normally the daily cycle, but a feed whose
+ * last fetch failed has a retry pending sooner than that, and saying "in 9h"
+ * while it is about to be retried in ten minutes would just be wrong.
+ */
+function nextStat(source: SourceRow): string {
+  const daily = nextDailyRun(config.refreshHour)
+  const retry = source.retry_at
+  const soonest = retry !== null && retry < daily ? retry : daily
+  const title =
+    soonest === daily
+      ? `daily refresh at ${clockHour(config.refreshHour)}`
+      : 'retrying after a failed fetch'
+  return stat('next', escapeHtml(until(soonest)), '', title)
+}
+
 /** The health word for a feed, plus the colour class it should carry. */
 function statusLabel(source: SourceRow): { text: string; cls: string } {
   if (source.permanent_error) return { text: 'broken', cls: 'bad' }
@@ -281,7 +297,7 @@ ${stat('status', status.text, status.cls)}
 ${rateStat(average)}
 ${stat('posts', String(count))}
 ${stat('updated', escapeHtml(ago(source.last_fetched_at)))}
-${stat('next', escapeHtml(until(nextDailyRun(config.refreshHour))), '', `next refresh at ${clockHour(config.refreshHour)}`)}
+${nextStat(source)}
 </div>
 ${error ? `<div class="err">${escapeHtml(error)}</div>` : ''}
 ${items.length ? `<ul style="margin-top:1.5rem">\n${recent}\n</ul>` : '<p class="meta" style="margin-top:1.5rem">No posts cached yet.</p>'}`,

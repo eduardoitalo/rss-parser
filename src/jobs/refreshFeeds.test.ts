@@ -75,6 +75,54 @@ test('refreshes run one after another, never concurrently', async () => {
   assert.deepEqual(events, ['start-1', 'end-1', 'start-2', 'end-2'])
 })
 
+test('a second cycle started mid-run is dropped, not interleaved', async () => {
+  const calls: number[] = []
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+
+  // The daily cycle, held open on the gate — as it would be, mid-fetch.
+  const daily = runRefreshCycle(
+    sources(1, 2),
+    async (id) => {
+      calls.push(id)
+      await gate
+      return ok
+    },
+    0,
+  )
+  await tick()
+
+  // A retry pass coming due while that is still running.
+  const retry = await runRefreshCycle(
+    sources(2),
+    async (id) => {
+      calls.push(id)
+      return ok
+    },
+    0,
+  )
+  assert.deepEqual(retry, { skipped: true })
+  assert.deepEqual(calls, [1], 'the retry never reached the network')
+
+  release()
+  await daily
+  assert.deepEqual(calls, [1, 2])
+
+  // And the guard is released again once the cycle is done.
+  const after = await runRefreshCycle(
+    sources(3),
+    async (id) => {
+      calls.push(id)
+      return ok
+    },
+    0,
+  )
+  assert.equal(after.status, 'ok')
+  assert.deepEqual(calls, [1, 2, 3])
+})
+
 test('the cycle waits the stagger between fetches, but not before the first', async () => {
   const startedAt = Date.now()
   await runRefreshCycle(sources(1, 2, 3), async () => ok, 20)

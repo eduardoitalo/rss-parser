@@ -17,8 +17,8 @@ import { log } from './log.js'
 import { syncAccounts } from './jobs/syncAccounts.js'
 import { checkProxyTraffic } from './jobs/checkProxyTraffic.js'
 import { pruneHistory } from './jobs/pruneHistory.js'
-import { refreshFeeds } from './jobs/refreshFeeds.js'
-import { dailyAt, every, Scheduler } from './jobs/scheduler.js'
+import { refreshFeeds, retryFailedFeeds } from './jobs/refreshFeeds.js'
+import { dailyAt, every, everyTick, Scheduler } from './jobs/scheduler.js'
 import { sweepAssets } from './jobs/sweepAssets.js'
 import { assetUsage, recomputeAssetUsage } from './lib/assets.js'
 import { describeError } from './lib/errors.js'
@@ -161,13 +161,20 @@ function lookup(prefix: string | undefined, rawHandle: string | undefined) {
 
 const scheduler = new Scheduler([
   {
-    // The only thing that fetches Instagram. Once a day at the configured hour,
-    // plus once on the way up — so a deploy always republishes with fresh posts,
-    // and a container that restarts at 4am doesn't wait until the next midnight.
+    // Once a day at the configured hour, plus once on the way up — so a deploy
+    // always republishes with fresh posts, and a container that restarts at 4am
+    // doesn't wait until the next midnight.
     name: 'refresh-feeds',
     schedule: dailyAt(config.refreshHour),
     runAtStartup: true,
     run: refreshFeeds,
+  },
+  {
+    // The only fetching outside that cycle: accounts whose last attempt failed,
+    // on their own backoff. Idle unless something is actually broken.
+    name: 'retry-feeds',
+    schedule: everyTick(),
+    run: retryFailedFeeds,
   },
   {
     name: 'check-proxy-traffic',

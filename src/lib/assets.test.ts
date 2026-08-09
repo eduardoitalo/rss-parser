@@ -13,10 +13,12 @@ process.env.PUBLIC_BASE_URL = 'http://localhost:3000'
 const { assetsDir } = await import('../config.js')
 const {
   assetUsage,
+  existingAsset,
   galleryAssetNames,
   parseGallery,
   postAssetName,
   recomputeAssetUsage,
+  storeImage,
   unlinkAssets,
 } = await import('./assets.js')
 
@@ -106,6 +108,50 @@ test('gallery JSON round-trips to its asset filenames', () => {
   const json = JSON.stringify(gallery)
   assert.deepEqual(parseGallery(json), gallery)
   assert.deepEqual(galleryAssetNames(json), ['3-abc-1.jpg', '3-abc-2.webp'])
+})
+
+/*
+ * Adopting what is already on disk. A refresh normally knows an image is
+ * mirrored from the item's `asset` column, but rows and files can drift apart —
+ * images are written before the transaction that references them commits — and
+ * re-downloading a file we already hold is metered proxy traffic spent on
+ * nothing. Asset names are content-stable, so a file under the name *is* the
+ * image.
+ */
+
+// Nothing may be fetched in these tests; a download attempt fails on the URL.
+const UNREACHABLE = 'http://127.0.0.1:9/never-fetched.jpg'
+
+test('an existing file is found under whatever extension it was saved with', async () => {
+  await recomputeAssetUsage() // the previous test emptied the directory
+  write('7-post.webp', 1234)
+
+  assert.deepEqual(await existingAsset('7-post'), {
+    filename: '7-post.webp',
+    url: 'http://localhost:3000/assets/7-post.webp',
+    bytes: 1234,
+    mime: 'image/webp',
+    downloaded: false,
+  })
+  assert.equal(await existingAsset('7-other'), undefined)
+})
+
+test('storing an image that is already on disk downloads nothing', async () => {
+  const before = await recomputeAssetUsage()
+
+  // Resolving at all proves it never went to the network.
+  const stored = await storeImage(UNREACHABLE, '7-post')
+  assert.equal(stored.filename, '7-post.webp')
+  assert.equal(stored.bytes, 1234)
+  assert.equal(stored.downloaded, false, 'and says so, so the log does not count it')
+  assert.deepEqual(assetUsage(), before, 'an adopted file is not counted twice')
+})
+
+test('an empty file is repaired rather than adopted', async () => {
+  // Downloads are renamed into place, so a zero-byte asset can only be damage.
+  write('7-broken.jpg', 0)
+  assert.equal(await existingAsset('7-broken'), undefined)
+  await assert.rejects(storeImage(UNREACHABLE, '7-broken'), 'falls through to a fetch')
 })
 
 test('a null or malformed gallery yields no names, never throws', () => {

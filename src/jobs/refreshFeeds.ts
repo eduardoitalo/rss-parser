@@ -1,5 +1,5 @@
 import { config } from '../config.js'
-import { listSources } from '../db.js'
+import { listSources, sourcesDueRetry } from '../db.js'
 import { log } from '../log.js'
 import { describeError } from '../lib/errors.js'
 import { type RefreshResult, refreshSource } from '../lib/refresh.js'
@@ -21,11 +21,24 @@ import type { JobResult } from './scheduler.js'
  * minutes of wall clock, against a whole day of headroom.
  *
  * Every account is refreshed on every run — there is no per-account due-check.
- * At one run a day a "not yet due" account would simply mean a day-old feed, and
- * a failed fetch waits for tomorrow's run rather than a backoff of its own.
+ * At one run a day a "not yet due" account would only mean a day-old feed.
  */
 export async function refreshFeeds(): Promise<JobResult> {
   return runRefreshCycle(listSources(), refreshSource, config.refreshStaggerMs)
+}
+
+/**
+ * Retry the accounts whose last fetch failed and whose backoff has elapsed (see
+ * config.retryBackoffMs). Checked every tick, but the query returns nothing
+ * unless something is actually broken, so on a healthy install this does no work
+ * at all.
+ *
+ * It shares the serial guard below with the daily cycle, so "one Instagram
+ * request at a time" holds across both — and a retry that comes due mid-cycle is
+ * simply dropped, since the cycle is about to refresh that account anyway.
+ */
+export async function retryFailedFeeds(): Promise<JobResult> {
+  return runRefreshCycle(sourcesDueRetry(), refreshSource, config.refreshStaggerMs)
 }
 
 /** What the cycle needs off a source row; the rest belongs to refreshSource. */
@@ -37,6 +50,14 @@ export interface RefreshTarget {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
+ * Held for the length of a cycle. The scheduler only stops a job overlapping
+ * *itself* — ticks are not serialized with each other — so without this the
+ * retry pass could start while the daily cycle was still working through the
+ * list, and there would be two Instagram requests in flight.
+ */
+let cycleRunning = false
+
+/**
  * The cycle itself, with its dependencies passed in so a test can drive it
  * without a network, database or filesystem.
  */
@@ -46,7 +67,24 @@ export async function runRefreshCycle(
   staggerMs: number,
 ): Promise<JobResult> {
   if (sources.length === 0) return { skipped: true }
+  if (cycleRunning) {
+    log.debug('a refresh cycle is already running, skipping this one')
+    return { skipped: true }
+  }
+  cycleRunning = true
 
+  try {
+    return await refreshEach(sources, refresh, staggerMs)
+  } finally {
+    cycleRunning = false
+  }
+}
+
+async function refreshEach(
+  sources: RefreshTarget[],
+  refresh: (sourceId: number) => Promise<RefreshResult>,
+  staggerMs: number,
+): Promise<JobResult> {
   let ok = 0
   let failed = 0
   let created = 0

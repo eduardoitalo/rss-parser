@@ -36,6 +36,9 @@ export type JobSchedule =
 
 export const every = (ms: number): JobSchedule => ({ kind: 'every', ms })
 export const dailyAt = (hour: number): JobSchedule => ({ kind: 'dailyAt', hour })
+/** Considered on every tick. For a job that is its own due-check and usually
+ * finds nothing to do — see jobs/refreshFeeds.retryFailedFeeds. */
+export const everyTick = (): JobSchedule => every(0)
 
 /** Whether a job last run at `lastRunAt` (0 = never) is due at `now`. */
 export function isDue(schedule: JobSchedule, lastRunAt: number, now: number): boolean {

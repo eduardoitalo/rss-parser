@@ -31,6 +31,12 @@ export interface SourceRow {
   profile_image_url: string | null
   /** Filename under data/assets. Non-null is the "already mirrored" test. */
   profile_asset: string | null
+  /**
+   * When a failed account may be retried, or null when there is nothing to
+   * retry. The only per-account scheduling left: a successful fetch clears it,
+   * and everything else happens on the daily cycle.
+   */
+  retry_at: number | null
   last_fetched_at: number | null
   last_success_at: number | null
   /**
@@ -108,6 +114,7 @@ CREATE TABLE IF NOT EXISTS sources (
   description TEXT,
   profile_image_url TEXT,
   profile_asset TEXT,
+  retry_at INTEGER,
   last_fetched_at INTEGER,
   last_success_at INTEGER,
   first_success_at INTEGER,
@@ -224,6 +231,7 @@ export function initDb(): Database.Database {
 function addMissingColumns(): void {
   const columns: [table: string, column: string, decl: string][] = [
     ['sources', 'first_success_at', 'INTEGER'],
+    ['sources', 'retry_at', 'INTEGER'],
     ['items', 'gallery', 'TEXT'],
   ]
   for (const [table, column, decl] of columns) {
@@ -366,6 +374,19 @@ export function getSource(id: number): SourceRow | undefined {
 }
 
 /**
+ * Accounts whose last fetch failed and whose backoff has elapsed, most overdue
+ * first. Deliberately unindexed: `retry_at` is null for every healthy account,
+ * and a table of a few dozen rows scans faster than an index would resolve.
+ */
+export function sourcesDueRetry(): SourceRow[] {
+  return db()
+    .prepare<[number], SourceRow>(
+      'SELECT * FROM sources WHERE retry_at IS NOT NULL AND retry_at <= ? ORDER BY retry_at',
+    )
+    .all(Date.now())
+}
+
+/**
  * A brand-new account. It serves an empty feed until the next refresh cycle
  * fills it — which, because accounts.txt is only reconciled at boot, is the
  * startup run of refresh-feeds a moment later.
@@ -460,6 +481,8 @@ export interface SourceOutcome {
   error: string | null
   httpStatus: number | null
   durationMs: number | null
+  /** When to retry, or null to leave it to the next daily cycle. */
+  retryAt: number | null
   consecutiveFailures: number
   permanentError: string | null
   permanentErrorKind: string | null
@@ -523,6 +546,7 @@ export function commitRefresh(
        last_fetch_error = @error,
        last_fetch_http_status = @httpStatus,
        last_fetch_duration_ms = @durationMs,
+       retry_at = @retryAt,
        consecutive_failures = @consecutiveFailures,
        permanent_error = @permanentError,
        permanent_error_kind = @permanentErrorKind,
@@ -552,6 +576,7 @@ export function commitRefresh(
       error: outcome.error,
       httpStatus: outcome.httpStatus,
       durationMs: outcome.durationMs,
+      retryAt: outcome.retryAt,
       consecutiveFailures: outcome.consecutiveFailures,
       permanentError: outcome.permanentError,
       permanentErrorKind: outcome.permanentErrorKind,

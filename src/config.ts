@@ -123,6 +123,23 @@ export const config = {
    */
   refreshStaggerMs: 5_000,
 
+  /**
+   * How soon a failed account is retried, doubling per consecutive failure and
+   * capped below: 10m, 20m, 40m, 80m, then every 4h until it works.
+   *
+   * This is the one thing that fetches outside the daily cycle, and it exists
+   * because the common failure is a burned proxy exit IP or a rate-limit blip —
+   * minutes old, not a day old. Waiting for tomorrow's cycle would leave a feed
+   * a full day stale over something that fixes itself. A failed fetch downloads
+   * no images, so a retry costs a profile request (~40 KB) and nothing more.
+   *
+   * Accounts that fail *permanently* (gone, private, renamed) are not retried
+   * here at all — no backoff makes a deleted account exist, so they wait for the
+   * next daily cycle, which is the same once-a-day retry they had before.
+   */
+  retryBackoffMs: 10 * 60_000,
+  maxRetryBackoffMs: 4 * 60 * 60_000,
+
   /** How long per-attempt fetch records are kept for diagnosing proxy trouble. */
   fetchLogRetentionDays: 7,
 

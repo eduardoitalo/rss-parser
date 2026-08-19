@@ -231,7 +231,7 @@ export function renderIndex(
     'Feeds — rss-parser',
     head,
     `<h1>Feeds</h1>
-<p class="sub">${sources.length} Instagram account${sources.length === 1 ? '' : 's'} published as RSS. The list comes from <a class="ext" href="https://github.com/numbersoffice/rss-parser/blob/main/accounts.txt"><code>accounts.txt</code></a>. Open a PR there to request a new feed.</p>
+<p class="sub">Public Instagram accounts published as RSS feeds. New accounts can be submitted via PR to <a class="ext" href="https://github.com/numbersoffice/rss-parser/blob/main/accounts.txt"><code>accounts.txt</code></a>.</p>
 ${body}
 <footer>Refreshed once a day at ${clockHour(config.refreshHour)} and on every deploy, keeping the newest ${config.maxItemsPerFeed} posts per feed.<br />
 Mirrored images: <strong>${formatBytes(usage.bytes)}</strong> across ${usage.files} file${usage.files === 1 ? '' : 's'}.${

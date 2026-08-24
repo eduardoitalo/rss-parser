@@ -29,17 +29,18 @@ const STYLES = `
   html { background: var(--bg); -webkit-font-smoothing: antialiased; }
   body {
     margin: 0; padding: 3rem 1.25rem 2rem; background: var(--bg); color: var(--fg);
-    font: 0.9375rem/1.7 var(--mono);
+    font: 1rem/1.7 var(--mono);
   }
   main { max-width: 44rem; margin: 0 auto; }
-  /* Four-tier type scale in rem (px at the default 16px root in parens):
-     1.25rem/20 heading / 0.9375rem/15 body (the base set on <body>) /
-     0.8125rem/13 secondary (meta, chrome, code, feed URLs, status values) /
-     0.6875rem/11 micro-label (uppercase keys). Keep new text on one rung. */
+  /* Two-tier type scale in rem (px at the default 16px root in parens):
+     1.25rem/20 heading / 1rem/16 everything else, the base set on <body>.
+     16px is the floor for text: secondary matter (meta, chrome, code, feed
+     URLs, status values) and the uppercase keys separate themselves by colour,
+     case, and letter-spacing instead of by shrinking. Keep new text on one rung. */
   h1 { font-size: 1.25rem; font-weight: 700; margin: 0 0 .3rem; }
-  .sub { color: var(--muted); margin: 0 0 2rem; font-size: 0.8125rem; }
-  .back { margin: 0 0 1.5rem; font-size: 0.8125rem; }
-  code, .mono { font-family: var(--mono); font-size: 0.8125rem; }
+  .sub { color: var(--muted); margin: 0 0 2rem; }
+  .back { margin: 0 0 1.5rem; }
+  code, .mono { font-family: var(--mono); font-size: 1rem; }
   a { color: var(--accent); }
   a:visited { color: var(--visited); }
   a:focus-visible { outline: 0.125rem solid var(--accent); outline-offset: 0.125rem; }
@@ -57,15 +58,13 @@ const STYLES = `
     width: 2.125rem; height: 2.125rem; object-fit: cover;
     background: var(--line); flex: none;
   }
-  .feed {
-    display: block; overflow-x: auto; white-space: nowrap; font-size: 0.8125rem;
-  }
+  .feed { display: block; overflow-x: auto; white-space: nowrap; }
   .feed-box {
     margin: 1.5rem 0; padding: .7rem .85rem; background: #fafafa;
     border: 0.0625rem solid var(--line);
   }
   .feed-box .label {
-    display: block; color: var(--muted); font-size: 0.6875rem; letter-spacing: .08em;
+    display: block; color: var(--muted); letter-spacing: .08em;
     text-transform: uppercase; margin-bottom: .3rem;
   }
   .status-box {
@@ -79,18 +78,17 @@ const STYLES = `
   }
   .stat:first-child { border-top: 0; }
   .stat-key {
-    flex: none; width: 5rem; color: var(--muted); font-size: 0.6875rem;
+    flex: none; width: 6.5rem; color: var(--muted);
     letter-spacing: .08em; text-transform: uppercase;
   }
-  .stat-val, .status { font-size: 0.8125rem; }
   /* Health colours, shared by the status-box cell and the index's per-feed
      indicator so one feed reads the same on both pages. */
   .ok { color: var(--accent); }
   .bad { color: var(--bad); }
   .wait { color: var(--muted); }
-  .more { margin-left: auto; font-size: 0.8125rem; white-space: nowrap; }
-  .err { color: var(--bad); font-size: 0.8125rem; word-break: break-word; }
-  footer { margin-top: 3.5rem; color: var(--muted); font-size: 0.8125rem; }
+  .more { margin-left: auto; white-space: nowrap; }
+  .err { color: var(--bad); word-break: break-word; }
+  footer { margin-top: 3.5rem; color: var(--muted); }
   .empty { padding: 1.5rem 0; }
 `
 

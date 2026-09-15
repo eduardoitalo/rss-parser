@@ -205,14 +205,14 @@ proxy:
 OUTBOUND_PROXY_URL=http://user-<USER>-country-us-session-{session}:<PASS>@gate.decodo.com:7000
 ```
 
-**Sticky sessions.** The adapter primes a logged-out guest session (cookies + CSRF
-token) and then makes the profile request, and the two must leave from the same
-exit IP. Include the literal token `{session}` anywhere in the URL and it is
-substituted per request, so the pair shares one IP; a retry after a block rotates
-to a fresh session, and therefore a fresh IP. Each account keeps a stable session
-derived from its handle, so two accounts refreshed in sequence never share an exit
-IP. With no `{session}` token the proxy just rotates per request — the placeholder
-works with any session-capable HTTP proxy.
+**Sticky sessions.** Refreshing one account takes several requests — the profile
+page, plus a post page for each gallery on it — and they should leave from the
+same exit IP. Include the literal token `{session}` anywhere in the URL and it is
+substituted per request, so an account's requests share one IP; a retry after a
+block rotates to a fresh session, and therefore a fresh IP. Each account keeps a
+stable session derived from its handle, so two accounts refreshed in sequence
+never share an exit IP. With no `{session}` token the proxy just rotates per
+request — the placeholder works with any session-capable HTTP proxy.
 
 Credentials are never logged or stored; only the proxy host appears in the boot
 line. When unset, fetches go out directly.
@@ -313,10 +313,13 @@ belongs to — today every line in `accounts.txt` is an Instagram username.
 
 ## Caveats
 
-- **The Instagram adapter uses Instagram's unofficial web API** — the same
-  endpoint instagram.com itself uses. It needs no credentials and works for public
+- **The Instagram adapter reads the public profile page** and mines the data
+  Instagram server-renders into it. It needs no credentials and works for public
   profiles, but Instagram may rate-limit or block it, especially from datacenter
   IPs. Errors appear on the index page and in the logs; cached posts keep serving.
+  This replaced the `web_profile_info` web API, which now answers `require_login`
+  to every logged-out client; expect the page payload to be reshaped from time to
+  time too, since it is just as unofficial.
 - Only public profiles work. A private account is reported as such and retried
   daily in case it opens up.
 - Feed URLs are unauthenticated and enumerable by design. If that matters, put
